@@ -8,10 +8,32 @@ pub fn load_workspace_def(path: &std::path::Path) -> Result<Value> {
     serde_json::from_slice(&data).with_context(|| format!("parsing {}", path.display()))
 }
 
-pub fn load_startup(layouts_dir: &std::path::Path) -> Result<Vec<String>> {
+pub struct StartupEntry {
+    pub name: String,
+    pub shortcut: Option<String>,
+}
+
+pub fn load_startup(layouts_dir: &std::path::Path) -> Result<Vec<StartupEntry>> {
     let path = layouts_dir.join("startup.json");
     let data = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&data).with_context(|| format!("parsing {}", path.display()))
+    let raw: Vec<serde_json::Value> =
+        serde_json::from_slice(&data).with_context(|| format!("parsing {}", path.display()))?;
+
+    raw.into_iter()
+        .map(|v| match v {
+            serde_json::Value::String(name) => Ok(StartupEntry { name, shortcut: None }),
+            serde_json::Value::Object(ref map) => {
+                let name = map
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("startup entry missing 'name' field"))?
+                    .to_string();
+                let shortcut = map.get("shortcut").and_then(|v| v.as_str()).map(|s| s.to_string());
+                Ok(StartupEntry { name, shortcut })
+            }
+            other => anyhow::bail!("invalid startup entry: {other}"),
+        })
+        .collect()
 }
 
 // ── App collection ────────────────────────────────────────────────────────────

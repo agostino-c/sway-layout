@@ -47,14 +47,14 @@ pub fn list() -> Result<()> {
 /// Run the startup sequence: assigns workspace 1, 2, 3... to each entry in startup.json.
 pub fn startup(force: bool) -> Result<()> {
     let dir = layouts_dir();
-    let names = crate::config::load_startup(&dir)?;
+    let entries = crate::config::load_startup(&dir)?;
 
     let mut workspace_trees: HashMap<String, LayoutNode> = HashMap::new();
     let mut all_apps: Vec<AppInfo> = Vec::new();
 
-    for (i, name) in names.iter().enumerate() {
+    for (i, entry) in entries.iter().enumerate() {
         let ws = (i + 1).to_string();
-        let path = dir.join(format!("{name}.json"));
+        let path = dir.join(format!("{}.json", entry.name));
         let def = crate::config::load_workspace_def(&path)?;
         let tree = build_layout_tree(&def)?;
         collect_apps(&tree, &ws, &mut all_apps);

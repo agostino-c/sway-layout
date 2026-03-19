@@ -25,6 +25,9 @@ pub enum Command {
     /// List available workspace definitions
     List,
 
+    /// Write sway bindsym includes from startup.json shortcuts, then reload sway
+    SyncShortcuts,
+
     /// Internal: spawn wrapper that encodes ws+path in process cmdline
     #[command(hide = true)]
     Spawn {

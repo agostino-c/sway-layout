@@ -3,6 +3,7 @@ mod config;
 mod ipc;
 mod layout;
 mod proc;
+mod shortcuts;
 mod spawn;
 
 use clap::Parser;
@@ -14,6 +15,7 @@ fn main() -> anyhow::Result<()> {
         Command::Startup { force } => layout::startup(force)?,
         Command::Run { name }      => layout::run(&name)?,
         Command::List              => layout::list()?,
+        Command::SyncShortcuts     => shortcuts::sync()?,
         Command::Spawn { cmd, .. } => spawn::run(&cmd)?,
     }
     Ok(())
