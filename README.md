@@ -1,13 +1,13 @@
 # sway-layout
 
-A declarative layout manager for the [Sway](https://swaywm.org/) window manager. Define your workspace layouts as JSON profiles and restore them with a single command (or keybinding).
+A declarative layout manager for the [Sway](https://swaywm.org/) window manager. Define your workspace layouts as JSON files and restore them on startup or on demand.
 
 ## Features
 
-- **Declarative JSON profiles** – describe which apps go where using nested containers with `splith`, `splitv`, `tabbed`, or `stacking` layouts
-- **Multi-workspace support** – a single profile can span several workspaces
-- **Safe by default** – skips workspaces that already have windows (override with `--force`)
-- **Keybinding sync** – generate and reload Sway `bindsym` includes directly from your profiles
+- **Declarative JSON workspaces** – describe which apps go where using nested containers with `splith`, `splitv`, `tabbed`, or `stacking` layouts
+- **Startup sequence** – define which workspaces open at sway launch via `startup.json`
+- **On-demand workspaces** – launch any workspace definition into the next free slot with a single command
+- **Safe by default** – startup skips workspaces that already have windows (override with `--force`)
 - **Lightweight** – pure Rust binary, no runtime dependencies beyond Sway itself
 
 ## Requirements
@@ -21,141 +21,94 @@ A declarative layout manager for the [Sway](https://swaywm.org/) window manager.
 git clone https://github.com/agostino-c/rustic-swayland.git
 cd rustic-swayland/sway-layout
 cargo build --release
-# copy the binary somewhere on your PATH
 cp target/release/sway-layout ~/.local/bin/
 ```
 
 ## Configuration
 
-Profiles are JSON files stored in `~/.config/sway/layouts/`. The filename (without `.json`) is the profile name used on the command line.
+Workspace definition files live in `~/.config/sway/layouts/`. Each file is named after the workspace definition (without `.json`) and contains a bare layout definition — no wrapper object.
 
-### Profile structure
-
-```json
-{
-  "shortcut": "$mod+Shift+w",
-  "workspaces": {
-    "1": { ... },
-    "2": { ... }
-  }
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `shortcut` | string (optional) | Sway keybinding that triggers `sway-layout run <profile>` |
-| `workspaces` | object | Map of workspace name → layout definition |
-
-### Layout definitions
+### Workspace definition format
 
 A layout definition is either:
 
 - **A string** – a shell command to launch a single app
-- **An object** with a single layout key (`splith`, `splitv`, `tabbed`, or `stacking`) whose value is an array of child layout definitions (strings or nested objects)
+- **An object** with a single layout key (`splith`, `splitv`, `tabbed`, or `stacking`) whose value is an array of child definitions
 
-#### Example: side-by-side editor and terminal
+```json
+{"tabbed": ["foot", "firefox"]}
+```
 
 ```json
 {
-  "shortcut": "$mod+Shift+d",
-  "workspaces": {
-    "1": {
-      "splith": [
-        "code --new-window",
-        "foot"
+  "splith": [
+    "firefox",
+    {
+      "splitv": [
+        "foot",
+        "foot -e htop"
       ]
     }
-  }
+  ]
 }
 ```
 
-#### Example: complex multi-workspace layout
+An empty container creates the workspace with the given layout but launches no apps:
 
 ```json
-{
-  "shortcut": "$mod+Shift+w",
-  "workspaces": {
-    "1": {
-      "splith": [
-        "firefox",
-        {
-          "splitv": [
-            "foot",
-            "foot -e htop"
-          ]
-        }
-      ]
-    },
-    "2": {
-      "tabbed": [
-        "thunderbird",
-        "telegram-desktop"
-      ]
-    }
-  }
-}
+{"tabbed": []}
 ```
 
-This produces:
+### Startup sequence
 
+`startup.json` is an ordered list of workspace definition names. They are assigned to workspace numbers 1, 2, 3, ... in order.
+
+```json
+["mainframe", "free"]
 ```
-Workspace 1                  Workspace 2
-┌──────────┬──────────┐      ┌────────────────────┐
-│          │   foot   │      │ thunderbird        │
-│ firefox  ├──────────┤      ├────────────────────┤
-│          │   htop   │      │ telegram-desktop   │
-└──────────┴──────────┘      └────────────────────┘
-```
+
+This opens `mainframe.json` on workspace 1 and `free.json` on workspace 2 when Sway starts.
 
 ## Usage
 
-### Run a profile
+### Run the startup sequence
 
 ```
-sway-layout run <profile> [--force]
+sway-layout startup [--force]
 ```
 
-Launches every app defined in the profile, waits for their windows to appear, then arranges them into the configured layout.
+Reads `startup.json`, launches each workspace in order. Skips workspaces that already have windows unless `--force` is passed.
 
-| Flag | Description |
-|---|---|
-| `--force` / `-f` | Apply the layout even if target workspaces already have windows |
+Add to your Sway config to run on login:
+
+```
+exec sway-layout startup
+```
+
+### Launch a workspace on demand
+
+```
+sway-layout run <name>
+```
+
+Loads the named definition and opens it in the next free workspace number. Useful for launching a workspace from an app's action button or a keybinding:
 
 ```bash
-sway-layout run dev
-sway-layout run dev --force
+sway-layout run work
 ```
 
-### List available profiles
+### List available definitions
 
 ```
 sway-layout list
 ```
 
-Prints all profile names found in `~/.config/sway/layouts/`.
-
-### Sync keybindings
-
-```
-sway-layout sync-shortcuts
-```
-
-Reads every profile that has a `shortcut` field, writes the corresponding `bindsym` lines to `~/.config/sway/layout-bindings`, and calls `swaymsg reload`. Add the following line to your Sway config to include the generated file:
-
-```
-include ~/.config/sway/layout-bindings
-```
-
-## Sway integration
-
-1. Add `include ~/.config/sway/layout-bindings` to your `~/.config/sway/config`.
-2. Run `sway-layout sync-shortcuts` once (or on login) to generate the file.
-3. Sway will now bind each profile's shortcut automatically.
+Prints all workspace definition names found in `~/.config/sway/layouts/` (excludes `startup.json`).
 
 ## How it works
 
-1. **Parse** the JSON profile and build an in-memory layout tree.
-2. **Check** (unless `--force`) that target workspaces are empty.
+1. **Parse** the JSON definition and build an in-memory layout tree.
+2. **Find** the target workspace (fixed slot for `startup`, next free number for `run`).
 3. **Launch** each app via an internal `spawn` wrapper that encodes the target workspace and position into its process command-line.
 4. **Listen** for `window::new` events on the Sway IPC socket.
 5. **Identify** each new window by walking `/proc` to read the spawn wrapper's arguments.
