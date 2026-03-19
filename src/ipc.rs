@@ -64,6 +64,12 @@ impl SwayIPC {
         Ok(serde_json::from_slice(&resp)?)
     }
 
+    pub fn get_workspaces(&mut self) -> Result<Vec<String>> {
+        let resp = self.roundtrip(1, &[])?;
+        let ws: Vec<serde_json::Value> = serde_json::from_slice(&resp)?;
+        Ok(ws.iter().filter_map(|w| w["name"].as_str().map(|s| s.to_string())).collect())
+    }
+
     pub fn get_version(&mut self) -> Result<()> {
         self.roundtrip(7, &[])?;
         Ok(())

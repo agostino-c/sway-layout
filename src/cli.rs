@@ -9,21 +9,21 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Load a named layout profile
-    Run {
-        /// Profile name (matches filename in layouts dir without .json)
-        profile: String,
-
+    /// Run the startup sequence (reads startup.json, assigns workspaces 1, 2, ...)
+    Startup {
         /// Apply even if target workspaces already have windows
         #[arg(long, short)]
         force: bool,
     },
 
-    /// List available layout profiles
-    List,
+    /// Launch a workspace definition into the next free workspace number
+    Run {
+        /// Workspace definition name (matches filename in layouts dir without .json)
+        name: String,
+    },
 
-    /// Write sway bindsym includes from profile shortcuts, then reload sway
-    SyncShortcuts,
+    /// List available workspace definitions
+    List,
 
     /// Internal: spawn wrapper that encodes ws+path in process cmdline
     #[command(hide = true)]

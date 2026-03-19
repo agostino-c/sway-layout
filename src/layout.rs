@@ -37,28 +37,28 @@ pub fn list() -> Result<()> {
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
         })
+        .filter(|name| name != "startup")
         .collect();
     names.sort();
     names.iter().for_each(|n| println!("{n}"));
     Ok(())
 }
 
-pub fn run(profile_name: &str, force: bool) -> Result<()> {
-    let path = layouts_dir().join(format!("{profile_name}.json"));
-    let profile = crate::config::load_profile(&path)?;
+/// Run the startup sequence: assigns workspace 1, 2, 3... to each entry in startup.json.
+pub fn startup(force: bool) -> Result<()> {
+    let dir = layouts_dir();
+    let names = crate::config::load_startup(&dir)?;
 
     let mut workspace_trees: HashMap<String, LayoutNode> = HashMap::new();
-    let mut blank_workspaces: Vec<String> = Vec::new();
     let mut all_apps: Vec<AppInfo> = Vec::new();
 
-    for (ws, def) in &profile.workspaces {
-        if def.is_null() {
-            blank_workspaces.push(ws.clone());
-            continue;
-        }
-        let tree = build_layout_tree(def)?;
-        collect_apps(&tree, ws, &mut all_apps);
-        workspace_trees.insert(ws.clone(), tree);
+    for (i, name) in names.iter().enumerate() {
+        let ws = (i + 1).to_string();
+        let path = dir.join(format!("{name}.json"));
+        let def = crate::config::load_workspace_def(&path)?;
+        let tree = build_layout_tree(&def)?;
+        collect_apps(&tree, &ws, &mut all_apps);
+        workspace_trees.insert(ws, tree);
     }
 
     let mut ipc = wait_for_ipc()?;
@@ -76,11 +76,50 @@ pub fn run(profile_name: &str, force: bool) -> Result<()> {
         }
     }
 
-    if all_apps.is_empty() && blank_workspaces.is_empty() {
-        println!("No apps to launch");
-        return Ok(());
-    }
+    apply_workspaces(&mut ipc, all_apps, workspace_trees)?;
+    ipc.cmd("workspace 1");
+    println!("\nLayout complete.");
+    Ok(())
+}
 
+/// Launch a workspace definition into the next free numbered workspace.
+pub fn run(def_name: &str) -> Result<()> {
+    let dir = layouts_dir();
+    let path = dir.join(format!("{def_name}.json"));
+    let def = crate::config::load_workspace_def(&path)?;
+
+    let mut ipc = wait_for_ipc()?;
+
+    let used: HashSet<u32> = ipc
+        .get_workspaces()?
+        .iter()
+        .filter_map(|n| n.parse::<u32>().ok())
+        .collect();
+    let ws_num = (1u32..).find(|n| !used.contains(n)).unwrap();
+    let ws = ws_num.to_string();
+
+    println!("Launching workspace definition '{def_name}' into workspace {ws}");
+
+    let tree = build_layout_tree(&def)?;
+    let mut all_apps: Vec<AppInfo> = Vec::new();
+    collect_apps(&tree, &ws, &mut all_apps);
+
+    let mut workspace_trees = HashMap::new();
+    workspace_trees.insert(ws.clone(), tree);
+
+    apply_workspaces(&mut ipc, all_apps, workspace_trees)?;
+    ipc.cmd(&format!("workspace {ws}"));
+    println!("\nLayout complete.");
+    Ok(())
+}
+
+// ── Internal ──────────────────────────────────────────────────────────────────
+
+fn apply_workspaces(
+    ipc: &mut SwayIPC,
+    all_apps: Vec<AppInfo>,
+    workspace_trees: HashMap<String, LayoutNode>,
+) -> Result<()> {
     if !all_apps.is_empty() {
         println!("Launching {} apps...", all_apps.len());
 
@@ -106,31 +145,22 @@ pub fn run(profile_name: &str, force: bool) -> Result<()> {
         });
 
         let expected = launch_apps(&all_apps)?;
-        let placed = collect_windows(rx, expected, &mut ipc);
+        let placed = collect_windows(rx, expected, ipc);
 
         println!("\nArranging layouts...");
         for (ws, tree) in &workspace_trees {
-            if let Some(windows) = placed.get(ws) {
-                arrange_workspace(&mut ipc, ws, tree, windows);
-            }
+            let windows = placed.get(ws).cloned().unwrap_or_default();
+            arrange_workspace(ipc, ws, &tree, &windows);
+        }
+    } else {
+        // No apps — just create workspaces with correct layout
+        for (ws, tree) in &workspace_trees {
+            arrange_workspace(ipc, ws, &tree, &HashMap::new());
         }
     }
 
-    for ws in &blank_workspaces {
-        println!("Creating blank workspace {ws}");
-        ipc.cmd(&format!("workspace {ws}"));
-    }
-
-    if let Some(first_ws) = profile.workspaces.keys().next() {
-        println!("\nReturning to workspace {first_ws}");
-        ipc.cmd(&format!("workspace {first_ws}"));
-    }
-
-    println!("\nLayout complete.");
     Ok(())
 }
-
-// ── Internal ──────────────────────────────────────────────────────────────────
 
 fn launch_apps(apps: &[AppInfo]) -> Result<usize> {
     let self_exe = std::env::current_exe()?;
@@ -258,19 +288,20 @@ fn arrange_workspace(
     tree: &LayoutNode,
     windows: &HashMap<String, Vec<i64>>,
 ) {
-    if windows.is_empty() {
-        return;
-    }
-
-    let total = windows.values().map(|v| v.len()).sum::<usize>();
     let root_layout = match tree {
         LayoutNode::Container { layout, .. } => layout.as_str(),
         _ => "splith",
     };
 
-    println!("  Arranging {ws}: {total} windows, root={root_layout}");
     ipc.cmd(&format!("workspace {ws}"));
     ipc.cmd(&format!("layout {root_layout}"));
+
+    if windows.is_empty() {
+        return;
+    }
+
+    let total = windows.values().map(|v| v.len()).sum::<usize>();
+    println!("  Arranging {ws}: {total} windows, root={root_layout}");
     arrange_tree(ipc, tree, windows, 0);
 }
 
@@ -339,8 +370,6 @@ fn arrange_tree(
         }
     }
 
-    // process subtrees after root level is fully populated —
-    // mirrors Go defer behaviour without the footgun
     for child in deferred {
         arrange_tree(ipc, child, windows, depth + 1);
     }

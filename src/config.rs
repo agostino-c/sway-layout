@@ -1,20 +1,16 @@
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 
-// ── On-disk types ─────────────────────────────────────────────────────────────
+// ── Loading ───────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Profile {
-    /// Optional sway keybinding, e.g. "$mod+Shift+w"
-    pub shortcut: Option<String>,
-    /// Workspace name → raw layout definition
-    pub workspaces: HashMap<String, Value>,
+pub fn load_workspace_def(path: &std::path::Path) -> Result<Value> {
+    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&data).with_context(|| format!("parsing {}", path.display()))
 }
 
-pub fn load_profile(path: &std::path::Path) -> Result<Profile> {
-    let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+pub fn load_startup(layouts_dir: &std::path::Path) -> Result<Vec<String>> {
+    let path = layouts_dir.join("startup.json");
+    let data = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_slice(&data).with_context(|| format!("parsing {}", path.display()))
 }
 
