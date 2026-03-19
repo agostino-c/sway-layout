@@ -48,9 +48,14 @@ pub fn run(profile_name: &str, force: bool) -> Result<()> {
     let profile = crate::config::load_profile(&path)?;
 
     let mut workspace_trees: HashMap<String, LayoutNode> = HashMap::new();
+    let mut blank_workspaces: Vec<String> = Vec::new();
     let mut all_apps: Vec<AppInfo> = Vec::new();
 
     for (ws, def) in &profile.workspaces {
+        if def.is_null() {
+            blank_workspaces.push(ws.clone());
+            continue;
+        }
         let tree = build_layout_tree(def)?;
         collect_apps(&tree, ws, &mut all_apps);
         workspace_trees.insert(ws.clone(), tree);
@@ -71,42 +76,49 @@ pub fn run(profile_name: &str, force: bool) -> Result<()> {
         }
     }
 
-    if all_apps.is_empty() {
+    if all_apps.is_empty() && blank_workspaces.is_empty() {
         println!("No apps to launch");
         return Ok(());
     }
 
-    println!("Launching {} apps...", all_apps.len());
+    if !all_apps.is_empty() {
+        println!("Launching {} apps...", all_apps.len());
 
-    let (tx, rx) = mpsc::channel::<WindowEvent>();
-    std::thread::spawn(move || {
-        let mut events = match SwayEvents::connect() {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("events: {e}");
-                return;
-            }
-        };
-        loop {
-            match events.next() {
-                Ok(ev) => {
-                    if tx.send(ev).is_err() {
-                        break;
-                    }
+        let (tx, rx) = mpsc::channel::<WindowEvent>();
+        std::thread::spawn(move || {
+            let mut events = match SwayEvents::connect() {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("events: {e}");
+                    return;
                 }
-                Err(_) => break,
+            };
+            loop {
+                match events.next() {
+                    Ok(ev) => {
+                        if tx.send(ev).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let expected = launch_apps(&all_apps)?;
+        let placed = collect_windows(rx, expected, &mut ipc);
+
+        println!("\nArranging layouts...");
+        for (ws, tree) in &workspace_trees {
+            if let Some(windows) = placed.get(ws) {
+                arrange_workspace(&mut ipc, ws, tree, windows);
             }
         }
-    });
+    }
 
-    let expected = launch_apps(&all_apps)?;
-    let placed = collect_windows(rx, expected, &mut ipc);
-
-    println!("\nArranging layouts...");
-    for (ws, tree) in &workspace_trees {
-        if let Some(windows) = placed.get(ws) {
-            arrange_workspace(&mut ipc, ws, tree, windows);
-        }
+    for ws in &blank_workspaces {
+        println!("Creating blank workspace {ws}");
+        ipc.cmd(&format!("workspace {ws}"));
     }
 
     if let Some(first_ws) = profile.workspaces.keys().next() {

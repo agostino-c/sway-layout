@@ -1,0 +1,10 @@
+{
+  "workspaces": {
+    "1": {
+      "tabbed": [
+        "mainframe"
+      ]
+    },
+    "2": null
+  }
+}
