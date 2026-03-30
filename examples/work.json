@@ -1,0 +1,11 @@
+{
+  "splith": [
+    "firefox",
+    {
+      "splitv": [
+        "foot",
+        "foot -e htop"
+      ]
+    }
+  ]
+}

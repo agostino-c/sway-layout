@@ -1,12 +1,14 @@
 # sway-layout
 
-A declarative layout manager for the [Sway](https://swaywm.org/) window manager. Define your workspace layouts as JSON files and restore them on startup or on demand.
+A declarative layout manager for the [Sway](https://swaywm.org/) window manager. Define your workspace layouts as JSON files and restore them on startup, on demand, or keep them enforced continuously with the daemon.
 
 ## Features
 
 - **Declarative JSON workspaces** – describe which apps go where using nested containers with `splith`, `splitv`, `tabbed`, or `stacking` layouts
 - **Startup sequence** – define which workspaces open at sway launch via `startup.json`
 - **On-demand workspaces** – launch any workspace definition into the next free slot with a single command
+- **Layout enforcement** – run a daemon that re-applies configured layouts whenever you switch workspaces or open a new window, preventing layouts from reverting to `split` after all windows close
+- **Per-workspace shortcuts** – define optional keybindings in `startup.json` and sync them into sway with `sync-shortcuts`
 - **Safe by default** – startup skips workspaces that already have windows (override with `--force`)
 - **Lightweight** – pure Rust binary, no runtime dependencies beyond Sway itself
 
@@ -59,17 +61,33 @@ An empty container creates the workspace with the given layout but launches no a
 {"tabbed": []}
 ```
 
-### Startup sequence
+### startup.json format
 
 `startup.json` is an ordered list of workspace definition names. They are assigned to workspace numbers 1, 2, 3, ... in order.
 
+Each entry can be a plain string (definition name only) or an object with a `name` and optional `shortcut`:
+
 ```json
-["mainframe", "free"]
+[
+  {"name": "work", "shortcut": "Super+1"},
+  {"name": "media", "shortcut": "Super+2"},
+  "scratch"
+]
 ```
 
-This opens `mainframe.json` on workspace 1 and `free.json` on workspace 2 when Sway starts.
+This opens `work.json` on workspace 1, `media.json` on workspace 2, and `scratch.json` on workspace 3.
 
-## Usage
+### The `sync-shortcuts` command
+
+After adding shortcuts to `startup.json`, run:
+
+```
+sway-layout sync-shortcuts
+```
+
+This generates sway `bindsym` include files for each shortcut and reloads sway, so keybindings take effect immediately.
+
+## Commands
 
 ### Run the startup sequence
 
@@ -79,23 +97,13 @@ sway-layout startup [--force]
 
 Reads `startup.json`, launches each workspace in order. Skips workspaces that already have windows unless `--force` is passed.
 
-Add to your Sway config to run on login:
-
-```
-exec sway-layout startup
-```
-
 ### Launch a workspace on demand
 
 ```
 sway-layout run <name>
 ```
 
-Loads the named definition and opens it in the next free workspace number. Useful for launching a workspace from an app's action button or a keybinding:
-
-```bash
-sway-layout run work
-```
+Loads the named definition and opens it in the next free workspace number.
 
 ### List available definitions
 
@@ -105,6 +113,34 @@ sway-layout list
 
 Prints all workspace definition names found in `~/.config/sway/layouts/` (excludes `startup.json`).
 
+### Sync shortcuts
+
+```
+sway-layout sync-shortcuts
+```
+
+Writes sway `bindsym` include files from the shortcuts defined in `startup.json`, then reloads sway.
+
+### Run the layout enforcement daemon
+
+```
+sway-layout daemon
+```
+
+Subscribes to sway IPC events and re-applies the configured layout type for each managed workspace whenever:
+
+- You switch focus to a managed workspace (handles the fresh empty workspace case after all windows closed)
+- A new window appears on the current workspace (ensures layout is correct for windows opened after the workspace was recreated)
+
+## Sway config integration
+
+Add both to your sway config to restore workspaces at login and keep layouts enforced:
+
+```
+exec sway-layout startup
+exec sway-layout daemon
+```
+
 ## How it works
 
 1. **Parse** the JSON definition and build an in-memory layout tree.
@@ -112,4 +148,4 @@ Prints all workspace definition names found in `~/.config/sway/layouts/` (exclud
 3. **Launch** each app via an internal `spawn` wrapper that encodes the target workspace and position into its process command-line.
 4. **Listen** for `window::new` events on the Sway IPC socket.
 5. **Identify** each new window by walking `/proc` to read the spawn wrapper's arguments.
-6. **Arrange** windows using `swaymsg` commands (`move scratchpad`, `layout`, `move to mark`) to reconstruct the declared container tree.
+6. **Arrange** windows using sway IPC commands (`move scratchpad`, `layout`, `move to mark`) to reconstruct the declared container tree. Marks are namespaced per workspace (e.g. `_layout_1`, `_layout_1_0`) to prevent cross-workspace placement when multiple workspaces are set up simultaneously.
