@@ -28,6 +28,9 @@ pub enum Command {
     /// Write sway bindsym includes from startup.json shortcuts, then reload sway
     SyncShortcuts,
 
+    /// Run persistently, re-applying workspace layouts whenever they change
+    Daemon,
+
     /// Internal: spawn wrapper that encodes ws+path in process cmdline
     #[command(hide = true)]
     Spawn {

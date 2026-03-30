@@ -16,6 +16,7 @@ fn main() -> anyhow::Result<()> {
         Command::Run { name }      => layout::run(&name)?,
         Command::List              => layout::list()?,
         Command::SyncShortcuts     => shortcuts::sync()?,
+        Command::Daemon            => layout::daemon()?,
         Command::Spawn { cmd, .. } => spawn::run(&cmd)?,
     }
     Ok(())

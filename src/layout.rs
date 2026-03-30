@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::config::{AppInfo, LayoutNode, build_layout_tree, collect_apps};
-use crate::ipc::{SwayEvents, SwayIPC, WindowEvent};
+use crate::ipc::{SwayEvent, SwayEvents, SwayIPC, WindowEvent};
 use crate::proc::find_spawn_metadata;
 
 pub fn layouts_dir() -> std::path::PathBuf {
@@ -302,7 +302,7 @@ fn arrange_workspace(
 
     let total = windows.values().map(|v| v.len()).sum::<usize>();
     println!("  Arranging {ws}: {total} windows, root={root_layout}");
-    arrange_tree(ipc, tree, windows, 0);
+    arrange_tree(ipc, ws, tree, windows, 0);
 }
 
 fn first_window(node: &LayoutNode, windows: &HashMap<String, Vec<i64>>) -> Option<i64> {
@@ -330,6 +330,7 @@ fn place_window(ipc: &mut SwayIPC, w: i64, depth: usize, n: usize, mark: &str, l
 
 fn arrange_tree(
     ipc: &mut SwayIPC,
+    ws: &str,
     node: &LayoutNode,
     windows: &HashMap<String, Vec<i64>>,
     depth: usize,
@@ -343,7 +344,11 @@ fn arrange_tree(
         return;
     };
 
-    let mark = format!("_layout_{path}");
+    let mark = if path.is_empty() {
+        format!("_layout_{ws}")
+    } else {
+        format!("_layout_{ws}_{path}")
+    };
     let layout_str = layout.as_str();
     let mut n = 0usize;
     let mut deferred: Vec<&LayoutNode> = Vec::new();
@@ -371,6 +376,60 @@ fn arrange_tree(
     }
 
     for child in deferred {
-        arrange_tree(ipc, child, windows, depth + 1);
+        arrange_tree(ipc, ws, child, windows, depth + 1);
+    }
+}
+
+pub fn daemon() -> Result<()> {
+    let dir = layouts_dir();
+    let entries = crate::config::load_startup(&dir)?;
+
+    let mut ws_layouts: HashMap<String, String> = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let ws = (i + 1).to_string();
+        let def_path = dir.join(format!("{}.json", entry.name));
+        match crate::config::load_workspace_def(&def_path).and_then(|d| build_layout_tree(&d)) {
+            Ok(LayoutNode::Container { layout, .. }) => {
+                ws_layouts.insert(ws, layout.as_str().to_string());
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("warning: could not load {}: {e}", entry.name),
+        }
+    }
+
+    if ws_layouts.is_empty() {
+        anyhow::bail!("no workspace layouts found in startup.json");
+    }
+
+    println!(
+        "sway-layout daemon: enforcing layouts for workspaces {:?}",
+        {
+            let mut keys: Vec<_> = ws_layouts.keys().collect();
+            keys.sort();
+            keys
+        }
+    );
+
+    let mut events = SwayEvents::connect_multi(&["window", "workspace"])?;
+    let mut ipc = wait_for_ipc()?;
+    let mut current_ws = ipc.get_focused_workspace()?;
+
+    loop {
+        match events.next_event()? {
+            SwayEvent::Workspace { change, name } if change == "focus" => {
+                current_ws = Some(name.clone());
+                if let Some(layout) = ws_layouts.get(&name) {
+                    ipc.cmd(&format!("layout {layout}"));
+                }
+            }
+            SwayEvent::Window(WindowEvent { change, .. }) if change == "new" => {
+                if let Some(ws) = &current_ws {
+                    if let Some(layout) = ws_layouts.get(ws) {
+                        ipc.cmd(&format!("layout {layout}"));
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }

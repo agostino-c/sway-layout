@@ -74,6 +74,15 @@ impl SwayIPC {
         self.roundtrip(7, &[])?;
         Ok(())
     }
+
+    pub fn get_focused_workspace(&mut self) -> Result<Option<String>> {
+        let resp = self.roundtrip(1, &[])?;
+        let ws: Vec<serde_json::Value> = serde_json::from_slice(&resp)?;
+        Ok(ws.iter()
+            .find(|w| w["focused"].as_bool() == Some(true))
+            .and_then(|w| w["name"].as_str())
+            .map(|s| s.to_string()))
+    }
 }
 
 // ── Window event ──────────────────────────────────────────────────────────────
@@ -82,6 +91,15 @@ pub struct WindowEvent {
     pub change: String,
     pub con_id: i64,
     pub pid:    i64,
+}
+
+// ── Combined event type ───────────────────────────────────────────────────────
+
+#[allow(dead_code)]
+pub enum SwayEvent {
+    Window(WindowEvent),
+    Workspace { change: String, name: String },
+    Other,
 }
 
 // ── Event subscription (runs in its own thread) ───────────────────────────────
@@ -97,6 +115,15 @@ impl SwayEvents {
         Ok(Self(conn))
     }
 
+    pub fn connect_multi(types: &[&str]) -> Result<Self> {
+        let path = sock()?;
+        let mut conn = UnixStream::connect(&path).with_context(|| format!("connect {path}"))?;
+        let sub = serde_json::to_string(types)?;
+        write_msg(&mut conn, 2, sub.as_bytes())?;
+        read_msg(&mut conn)?;
+        Ok(Self(conn))
+    }
+
     /// Blocking — call from a background thread.
     pub fn next(&mut self) -> Result<WindowEvent> {
         loop {
@@ -107,6 +134,23 @@ impl SwayEvents {
             let pid    = v["container"]["pid"].as_i64().unwrap_or(0);
             if con_id != 0 {
                 return Ok(WindowEvent { change, con_id, pid });
+            }
+        }
+    }
+
+    pub fn next_event(&mut self) -> Result<SwayEvent> {
+        loop {
+            let body = read_msg(&mut self.0)?;
+            let v: serde_json::Value = serde_json::from_slice(&body)?;
+            let change = v["change"].as_str().unwrap_or("").to_string();
+            if v.get("container").is_some() {
+                let con_id = v["container"]["id"].as_i64().unwrap_or(0);
+                let pid = v["container"]["pid"].as_i64().unwrap_or(0);
+                if con_id != 0 {
+                    return Ok(SwayEvent::Window(WindowEvent { change, con_id, pid }));
+                }
+            } else if let Some(name) = v["current"]["name"].as_str() {
+                return Ok(SwayEvent::Workspace { change, name: name.to_string() });
             }
         }
     }
