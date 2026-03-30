@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "sway-layout", about = "Declarative layout manager for Sway")]
+#[command(name = "sway-layout", about = "Declarative layout manager for Sway", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
